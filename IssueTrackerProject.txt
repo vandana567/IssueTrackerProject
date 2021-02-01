@@ -1,0 +1,592 @@
+//validator
+
+package com.issuetracker.validator;
+
+import java.time.LocalDate;
+
+import org.apache.commons.logging.LogFactory;
+
+import com.issuetracker.exception.IssueTrackerException;
+import com.issuetracker.model.Issue;
+import com.issuetracker.model.IssueStatus;
+
+//Do Not Change Any Signature
+public class Validator
+{
+ public void validate(Issue issue) throws IssueTrackerException
+ {
+	// Your Code Goes Here
+     try{
+     if(!isValidIssueId(issue.getIssueId())) {
+	 throw new IssueTrackerException("Validator.INVALID_ISSUE_ID");
+     }
+     if(!isValidIssueDescription(issue.getIssueDescription())) {
+	 throw new IssueTrackerException("Validator.INVALID_ISSUE_DESCRIPTION");
+     }
+     if(!isValidReportedOn(issue.getReportedOn())) {
+	 throw new IssueTrackerException("Validator.INVALID_REPORTED_DATE");
+     }
+     if(!isValidStatus(issue.getStatus())) {
+	 throw new IssueTrackerException("Validator.INVALID_STATUS");
+     }
+     }catch(IssueTrackerException e) {
+	// TODO: handle exception
+	 LogFactory.getLog(getClass()).error(e.getMessage(),e);
+	 throw e;
+    }
+ }
+
+ public Boolean isValidIssueId(String issueId)
+ {
+	// Your Code Goes Here
+     if(issueId==null)return false;
+     
+     String regex = "(MTI)-(I)-(([0-9]{2}[1-9])|([1-9][0-9]{2})|([0-9][1-9][0-9]))-(LS|MS|HS)";
+     if(issueId.matches(regex))
+	 return true;
+     
+
+	return false;
+
+ }
+
+ public Boolean isValidIssueDescription(String issueDescription)
+ {
+	// Your Code Goes Here
+     if(issueDescription==null || issueDescription.isBlank())
+	 return false;
+     if(!issueDescription.trim().equals(issueDescription) || issueDescription.length()>50)
+	 return false;
+     String regex="([A-Za-z]+[\\s]?)+";
+     if(issueDescription.matches(regex))
+	 return true;
+
+	return false;
+ }
+
+ public Boolean isValidReportedOn(LocalDate reportedOn)
+ {
+	// Your Code Goes Here
+     if(reportedOn==null) return false;
+     if(reportedOn.isBefore(LocalDate.now()))
+	 return true;
+     if(reportedOn.equals(LocalDate.now()))
+	 return true;
+
+	return false;
+ }
+
+ public Boolean isValidStatus(IssueStatus status)
+ {
+	// Your Code Goes Here
+     if(status==null) return false;
+     if(status==IssueStatus.OPEN || status==IssueStatus.IN_PROGRESS)
+	 return true;
+
+	return false;
+ }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//issueServiceImpl
+
+package com.issuetracker.service;
+
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+import org.apache.commons.logging.LogFactory;
+
+import com.issuetracker.dao.IssueDAO;
+import com.issuetracker.dao.IssueDAOImpl;
+import com.issuetracker.exception.IssueTrackerException;
+import com.issuetracker.model.Assignee;
+import com.issuetracker.model.Issue;
+import com.issuetracker.model.IssueReport;
+import com.issuetracker.model.IssueStatus;
+import com.issuetracker.validator.Validator;
+
+public class IssueServiceImpl implements IssueService
+{
+    private AssigneeService assigneeService=new AssigneeServiceImpl();
+
+    private IssueDAO issueDAO=new IssueDAOImpl();
+    
+    private Validator validator=new Validator();
+    /**
+     * @params
+     *         issue - The new issue to be reported
+     * 
+     * @operation Reports a new issue by
+     *            * validating its details
+     *            * fetch an assignee
+     *            * persists the issue in the issueList
+     * 
+     * @returns
+     *          String - The issue id
+     */
+    @Override
+    public String reportAnIssue(Issue issue) throws IssueTrackerException
+    {
+	// Your Code Goes Here
+	try {
+	validator.validate(issue);
+	List<Assignee> receivedAssignees=assigneeService.fetchAssignee(issue.getIssueUnit());
+	if(!receivedAssignees.isEmpty()) {
+	   Assignee first=receivedAssignees.get(0);
+	   issue.setAssigneeEmail(first.getAssigneeEmail());
+	   assigneeService.updateActiveIssueCount(first.getAssigneeEmail(), 'I');
+	 
+	}
+	String receivedIssueId = issueDAO.reportAnIssue(issue);
+	if(receivedIssueId==null) {
+	    throw new IssueTrackerException("IssueService.DUPLICATE_ISSUE_ID");	    
+	}
+	return receivedIssueId;
+	}catch (IssueTrackerException e) {
+	    // TODO: handle exception
+	    if(e.getMessage().contains("IssueService"))
+		LogFactory.getLog(getClass()).error(e.getMessage(), e);
+	    throw e;
+	}
+	
+    }
+
+    /**
+     * @params
+     *         issueId - The issue id
+     *         status - The new status
+     * 
+     * @operation Updates the status of the given issue with the given status
+     * 
+     * @returns
+     *          Boolean - Result of the status update
+     */
+    @Override
+    public Boolean updateStatus(String issueId,IssueStatus status) throws IssueTrackerException
+    {
+	// Your Code Goes Here
+	try {
+	Issue receivedIssue = issueDAO.getIssueById(issueId);
+	if(receivedIssue==null) {
+	    throw new IssueTrackerException("IssueService.ISSUE_NOT_FOUND");
+	}
+	if(status==receivedIssue.getStatus()) {
+	    throw new IssueTrackerException("IssueService.NO_STATUS_CHANGE");
+	}
+	if(status==IssueStatus.RECALLED && receivedIssue.getStatus()!=IssueStatus.OPEN) {
+	    throw new IssueTrackerException("IssueService.INCOMPATIBLE_STATUS");
+	}
+	issueDAO.updateStatus(receivedIssue, status);
+	if (!(IssueStatus.OPEN.equals(status)
+		      || IssueStatus.IN_PROGRESS.equals(status))) {
+	    assigneeService.updateActiveIssueCount(receivedIssue.getAssigneeEmail(), 'D');
+	}
+	return true;
+	}catch (IssueTrackerException e) {
+	    // TODO: handle exception
+	    if(e.getMessage().contains("IssueService"))
+		LogFactory.getLog(getClass()).error(e.getMessage(), e);
+	    throw e;
+	}
+    }
+
+    /**
+     * @params
+     *         filterCriteria - A map where its
+     *         key denotes an attribute of the issue object
+     *         value contains the filter value
+     * 
+     * @operation Generates a report of issues based on the filter criteria
+     * 
+     * @returns
+     *          List<IssueReport> - The list of filtered issue objects
+     */
+    @Override
+    public List<IssueReport> showIssues(Map<Character, Object> filterCriteria) throws IssueTrackerException
+    {
+	// Your Code Goes Here
+	try {
+	List<Issue> receivedList=issueDAO.getIssueList();
+	List<Issue> filterIssues=new ArrayList<Issue>();
+	for(Character c:filterCriteria.keySet()) {
+	   if(c=='A') {
+	       
+	        filterIssues=receivedList.stream()
+		       				.filter(issue-> issue.getAssigneeEmail()!=null && issue.getAssigneeEmail().equals(filterCriteria.get(c)))
+		       				.collect(Collectors.toList());
+	   }
+	   else if(c=='S') {
+	        filterIssues=receivedList.stream()
+		       				.filter(issue->issue.getStatus().equals(filterCriteria.get(c)))
+		       				.collect(Collectors.toList());
+	   }
+	}
+	
+	if(filterIssues.isEmpty()) {
+	    throw new IssueTrackerException("IssueService.NO_ISSUES_FOUND");
+	}
+	
+	Iterator<Issue> itr=filterIssues.iterator();
+	List<IssueReport> finalList=new ArrayList<IssueReport>();
+	while(itr.hasNext()) {
+	    Issue tempIssue=itr.next();
+	    finalList.add(new IssueReport(tempIssue.getIssueId(), tempIssue.getIssueDescription(), tempIssue.getAssigneeEmail(), tempIssue.getStatus()));
+	}
+	
+
+	return finalList;
+	}catch (IssueTrackerException e) {
+	    // TODO: handle exception
+	    if(e.getMessage().contains("IssueService"))
+		LogFactory.getLog(getClass()).error(e.getMessage(), e);
+	    throw e;
+	}
+    }
+
+    /**
+     * @operation Deletes the issue object which are resolved or closed,
+     *            at least 14 days ago
+     * 
+     * @returns
+     *          List<Issue> - The list of issues which had been deleted
+     */
+    @Override
+    public List<Issue> deleteIssues() throws IssueTrackerException
+    {
+	// Your Code Goes Here
+	try {
+	List<Issue> recieveList=issueDAO.getIssueList();
+	List<Issue> newList=new ArrayList<Issue>();
+	Iterator<Issue> itr=recieveList.iterator();
+	while(itr.hasNext()) {
+	    Issue tempIssue=itr.next();
+	    if((tempIssue.getStatus().equals(IssueStatus.RESOLVED)|| tempIssue.getStatus().equals(IssueStatus.CLOSED)) && ChronoUnit.DAYS.between(tempIssue.getUpdatedOn(),LocalDate.now())>=14) {
+		newList.add(tempIssue);
+	    }
+	}
+	
+	if(newList.isEmpty()) {
+	    throw new IssueTrackerException("IssueSerivce.NO_ISSUES_DELETED");
+	}
+
+	return newList;
+    }catch (IssueTrackerException e) {
+	// TODO: handle exception
+	if(e.getMessage().contains("IssueService"))
+		LogFactory.getLog(getClass()).error(e.getMessage(), e);
+	    throw e;
+    }
+    }	
+}
+
+
+
+////////////////////////////
+//AssigneeServiceImpl
+
+package com.issuetracker.service;
+
+
+import java.util.List;
+
+import java.util.stream.Collectors;
+
+import com.issuetracker.dao.AssigneeDAO;
+import com.issuetracker.dao.AssigneeDAOImpl;
+import com.issuetracker.model.Assignee;
+import com.issuetracker.model.Unit;
+
+public class AssigneeServiceImpl implements AssigneeService
+{
+    private AssigneeDAO assigneeDAO=new AssigneeDAOImpl();
+    
+    
+
+    /**
+     * @params
+     *         unit - The assignee unit
+     * 
+     * @operation Fetches the assignees list for the given unit
+     * 
+     * @returns
+     *          List<Assignee> - List of assignees fetched
+     */
+    @Override
+    public List<Assignee> fetchAssignee(Unit unit) 
+    {
+	// Your Code Goes Here
+	List<Assignee> receivedAssignees= assigneeDAO.fetchAssignees(unit);
+	 return receivedAssignees.stream().filter(assignee->assignee.getNumberOfIssuesActive()<3).collect(Collectors.toList());
+
+	
+    }
+
+    /**
+     * @params
+     *         assigneeEmail - The assignee email id
+     *         operation - The operation code
+     * 
+     * @operation Updates the active issues count for the given assignee email,
+     *            by incrementing or decrementing it based on the operation code
+     * 
+     */
+    @Override
+    public void updateActiveIssueCount(String assigneeEmail,
+				       Character operation)
+    {
+	// Your Code Goes Here
+	Assignee assignee=assigneeDAO.getAssigneeByEmail(assigneeEmail);
+	switch(operation) {
+	    case'I':assignee.setNumberOfIssuesActive(assignee.getNumberOfIssuesActive()+1);break;
+	    case'D':assignee.setNumberOfIssuesActive(assignee.getNumberOfIssuesActive()-1);break;
+	}	
+	
+    }
+}
+
+
+//////////////////////////////////////
+//IssueStatus
+
+package com.issuetracker.model;
+
+// Do Not Change Any Signature
+public enum IssueStatus
+{
+    // Your Code Goes Here
+    OPEN,
+    IN_PROGRESS,
+    CLOSED,
+    RESOLVED,
+    RECALLED
+}
+
+
+////////////////////////////////////////
+//IssueReport
+
+package com.issuetracker.model;
+
+// Do Not Change Any Signature
+public class IssueReport
+{
+    // Your Code Goes Here
+    private String issueId;
+    private String issueDescription;
+    private String assigneeEmail;
+    private IssueStatus status;
+    
+    public IssueReport(String issueid,String issueDescription,String assigneeEmail,IssueStatus status) {
+	this.assigneeEmail=assigneeEmail;
+	this.issueId=issueid;
+	this.issueDescription=issueDescription;
+	this.status=status;
+    }
+
+    public String getIssueId()
+    {
+        return issueId;
+    }
+
+    public void setIssueId(String issueId)
+    {
+        this.issueId = issueId;
+    }
+
+    public String getIssueDescription()
+    {
+        return issueDescription;
+    }
+
+    public void setIssueDescription(String issueDescription)
+    {
+        this.issueDescription = issueDescription;
+    }
+
+    public String getAssigneeEmail()
+    {
+        return assigneeEmail;
+    }
+
+    public void setAssigneeEmail(String assigneeEmail)
+    {
+        this.assigneeEmail = assigneeEmail;
+    }
+
+    public IssueStatus getStatus()
+    {
+        return status;
+    }
+
+    public void setStatus(IssueStatus status)
+    {
+        this.status = status;
+    }
+    
+    
+}
+
+
+/////////////////////////////////////////////////////////////////////////////////////
+//assignee
+
+package com.issuetracker.model;
+
+import java.time.LocalDate;
+
+// Do Not Change Any Signature
+public class Assignee
+{
+    // Your Code Goes Here
+    private String assigneeId;
+    private String assigneeName;
+    private String assigneeEmail;
+    private Unit workingUnit;
+    private LocalDate employeeSince;
+    private Integer numberOfIssuesActive;
+    
+    public Assignee(String assigneeId,String assigneeName,String assigneeEmail,Unit workingUnit,LocalDate employeeSince,Integer numberofIssuesActive) {
+	this.assigneeId=assigneeId;
+	this.assigneeName=assigneeName;
+	this.assigneeEmail=assigneeEmail;
+	this.workingUnit=workingUnit;
+	this.employeeSince=employeeSince;
+	this.numberOfIssuesActive=numberofIssuesActive;
+    }
+
+    public String getAssigneeId()
+    {
+        return assigneeId;
+    }
+
+    public void setAssigneeId(String assigneeId)
+    {
+        this.assigneeId = assigneeId;
+    }
+
+    public String getAssigneeName()
+    {
+        return assigneeName;
+    }
+
+    public void setAssigneeName(String assigneeName)
+    {
+        this.assigneeName = assigneeName;
+    }
+
+    public String getAssigneeEmail()
+    {
+        return assigneeEmail;
+    }
+
+    public void setAssigneeEmail(String assigneeEmail)
+    {
+        this.assigneeEmail = assigneeEmail;
+    }
+
+    public Unit getWorkingUnit()
+    {
+        return workingUnit;
+    }
+
+    public void setWorkingUnit(Unit workingUnit)
+    {
+        this.workingUnit = workingUnit;
+    }
+
+    public LocalDate getEmployeeSince()
+    {
+        return employeeSince;
+    }
+
+    public void setEmployeeSince(LocalDate employeeSince)
+    {
+        this.employeeSince = employeeSince;
+    }
+
+    public Integer getNumberOfIssuesActive()
+    {
+        return numberOfIssuesActive;
+    }
+
+    public void setNumberOfIssuesActive(Integer numberOfIssuesActive)
+    {
+        this.numberOfIssuesActive = numberOfIssuesActive;
+    }
+    
+    
+    
+}
+//////////////////////////////////////////////////////////////////////////////////////
+//issueServiceTest
+
+package com.issuetracker.test;
+
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
+
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+
+import com.issuetracker.exception.IssueTrackerException;
+import com.issuetracker.model.Issue;
+import com.issuetracker.model.IssueStatus;
+import com.issuetracker.model.Unit;
+import com.issuetracker.service.IssueService;
+import com.issuetracker.service.IssueServiceImpl;
+
+// Do Not Change Any Signature
+public class IssueServiceTest
+{
+    private IssueService issueService = new IssueServiceImpl();
+
+    @Test
+    public void reportAnIssueValidTest() throws IssueTrackerException
+    {
+	// Your Code Goes Here
+	Issue issue=new Issue("MTI-I-013-HS", "Third menu item is missing",
+	                      Unit.ADMINISTRATION,LocalDate.now().minus(11, ChronoUnit.DAYS) , null, null, IssueStatus.IN_PROGRESS);
+	String issueId=issueService.reportAnIssue(issue);
+	Assertions.assertEquals("MTI-I-013-HS", issueId);
+    }
+
+    @Test
+    public void reportAnIssueInvalidReportedDateTest()
+    {
+	// Your Code Goes Here
+	Issue issue=new Issue("MTI-I-013-HS", "Third menu item is missing",
+	                      Unit.ADMINISTRATION,LocalDate.now().plus(5, ChronoUnit.DAYS) , null, null, IssueStatus.IN_PROGRESS);
+	IssueTrackerException dateException=Assertions.assertThrows(IssueTrackerException.class, ()->issueService.reportAnIssue(issue));
+	Assertions.assertEquals("Validator.INVALID_REPORTED_DATE", dateException.getMessage());
+    }
+
+    @Test
+    public void reportAnIssueInvalidStatusTest()
+    {
+	// Your Code Goes Here
+	Issue issue=new Issue("MTI-I-013-HS", "Third menu item is missing",
+	                      Unit.ADMINISTRATION,LocalDate.now().minus(11, ChronoUnit.DAYS) , null, null, IssueStatus.CLOSED);
+	IssueTrackerException dateException=Assertions.assertThrows(IssueTrackerException.class, ()->issueService.reportAnIssue(issue));
+	Assertions.assertEquals("Validator.INVALID_STATUS", dateException.getMessage());
+	
+    }
+
+    @Test
+    public void reportAnIssueDuplicateIssueIdTest()
+    {
+	// Your Code Goes Here
+	Issue issue=new Issue("MTI-I-001-HS", "Third menu item is missing",
+	                      Unit.ADMINISTRATION,LocalDate.now().minus(11, ChronoUnit.DAYS) , null, null, IssueStatus.IN_PROGRESS);
+	IssueTrackerException exception=Assertions.assertThrows(IssueTrackerException.class, ()->issueService.reportAnIssue(issue));
+	Assertions.assertEquals("IssueService.DUPLICATE_ISSUE_ID", exception.getMessage() );
+    }
+}
+
+/////////////////////////////////////////////////////////
